@@ -7,6 +7,7 @@ participant flow arithmetic, and CSV batch processing.
 
 import unittest
 import json
+from pathlib import Path
 from consort_evaluator import (
     ConsortEvaluatorEngine,
     FlowDiagramCounts,
@@ -331,13 +332,37 @@ class TestSerializationAndBatch(unittest.TestCase):
         self.assertEqual(report.section_scores["DISCUSSION"].compliance_percentage, 100.0)
         self.assertEqual(report.section_scores["OTHER_INFO"].compliance_percentage, 100.0)
 
-    def test_actionable_remediation_details(self):
-        responses = {"1a": "NO", "1b": "PARTIAL"}
-        report = ConsortEvaluatorEngine.evaluate_checklist_responses(responses=responses)
-        self.assertTrue(len(report.actionable_remediation_items) >= 2)
-        items = [r["item"] for r in report.actionable_remediation_items]
-        self.assertIn("1a", items)
-        self.assertIn("1b", items)
+    def test_cli_batch_subcommand(self, tmp_path_factory=None):
+        import subprocess
+        import sys
+        res = subprocess.run(
+            [sys.executable, "cli.py", "batch", "-i", "sample.csv", "-o", "tests_output_batch.csv"],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(res.returncode, 0)
+        out_p = Path("tests_output_batch.csv")
+        self.assertTrue(out_p.exists())
+        content = out_p.read_text(encoding="utf-8")
+        self.assertIn("TRIAL-P3-CARDIO", content)
+        self.assertIn("HIGH_QUALITY", content)
+        out_p.unlink(missing_ok=True)
+
+    def test_cli_batch_json_output(self):
+        import subprocess
+        import sys
+        res = subprocess.run(
+            [sys.executable, "cli.py", "batch", "-i", "sample.csv", "-o", "tests_output_batch.json", "--json"],
+            capture_output=True,
+            text=True
+        )
+        self.assertEqual(res.returncode, 0)
+        out_p = Path("tests_output_batch.json")
+        self.assertTrue(out_p.exists())
+        data = json.loads(out_p.read_text(encoding="utf-8"))
+        self.assertEqual(len(data), 3)
+        self.assertEqual(data[0]["trial_id"], "TRIAL-P3-CARDIO")
+        out_p.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

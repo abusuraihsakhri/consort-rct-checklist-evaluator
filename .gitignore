@@ -1,10 +1,56 @@
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Pytest & testing artifacts
 .pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Temporary test outputs & batch files
 results.csv
 output.csv
+out_smoke.csv
+tests_output_batch.csv
+tests_output_batch.json
 *.log
-dist/
-build/
-*.egg-info/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE & editor caches
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store

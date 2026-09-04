@@ -5,10 +5,12 @@ Supports interactive checklists, JSON/CSV batch auditing, flow diagram arithmeti
 """
 
 import argparse
+import csv
 import json
 import sys
 import os
 from pathlib import Path
+from typing import Optional
 
 # Add parent directory to path if needed
 sys.path.insert(0, str(Path(__file__).parent.resolve()))
@@ -133,35 +135,101 @@ def run_interactive_mode() -> ConsortAuditReport:
     )
 
 
+def run_batch_evaluation(input_path: str, output_path: Optional[str] = None, json_format: bool = False):
+    """Execute batch audit across a CSV file of trial checklist responses."""
+    if not os.path.exists(input_path):
+        print(f"Error: CSV file '{input_path}' not found.", file=sys.stderr)
+        sys.exit(1)
+
+    with open(input_path, "r", encoding="utf-8") as f:
+        csv_text = f.read()
+
+    reports = ConsortEvaluatorEngine.evaluate_batch_csv(csv_text)
+
+    if output_path:
+        out_file = Path(output_path)
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        if json_format or output_path.lower().endswith(".json"):
+            with open(out_file, "w", encoding="utf-8") as f:
+                json.dump([r.to_dict() for r in reports], f, indent=2)
+        else:
+            # Output tabular CSV summary
+            fieldnames = [
+                "trial_id",
+                "trial_title",
+                "overall_compliance_percentage",
+                "overall_quality_tier",
+                "total_points_awarded",
+                "total_points_max",
+                "d1_randomisation_risk",
+                "d2_deviations_risk",
+                "d3_missing_data_risk",
+                "d4_measurement_risk",
+                "d5_reported_result_risk",
+                "actionable_remediations_count",
+            ]
+            with open(out_file, "w", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                for rep in reports:
+                    rob_map = {r.domain_id: r.risk_level for r in rep.risk_of_bias_evaluation}
+                    writer.writerow({
+                        "trial_id": rep.trial_id,
+                        "trial_title": rep.trial_title,
+                        "overall_compliance_percentage": rep.overall_compliance_percentage,
+                        "overall_quality_tier": rep.overall_quality_tier,
+                        "total_points_awarded": rep.total_points_awarded,
+                        "total_points_max": rep.total_points_max,
+                        "d1_randomisation_risk": rob_map.get("D1_RANDOMISATION", "UNKNOWN"),
+                        "d2_deviations_risk": rob_map.get("D2_DEVIATIONS", "UNKNOWN"),
+                        "d3_missing_data_risk": rob_map.get("D3_MISSING_DATA", "UNKNOWN"),
+                        "d4_measurement_risk": rob_map.get("D4_MEASUREMENT", "UNKNOWN"),
+                        "d5_reported_result_risk": rob_map.get("D5_REPORTED_RESULT", "UNKNOWN"),
+                        "actionable_remediations_count": len(rep.actionable_remediation_items),
+                    })
+        print(f"Successfully processed {len(reports)} trials. Output written to '{output_path}'.")
+    else:
+        if json_format:
+            print(json.dumps([r.to_dict() for r in reports], indent=2))
+        else:
+            for rep in reports:
+                print(format_report_text(rep))
+                print("\n")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="CONSORT 2010 Statement RCT Reporting Checklist & Flow Evaluator",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
 
+    subparsers = parser.add_subparsers(dest="subcommand", help="Available subcommands")
+
+    # Batch subcommand
+    batch_parser = subparsers.add_parser("batch", help="Batch evaluate multiple trials from a CSV file")
+    batch_parser.add_argument("-i", "--input", type=str, required=True, help="Input CSV file path containing trial checklists")
+    batch_parser.add_argument("-o", "--output", type=str, default=None, help="Output file path (CSV or JSON)")
+    batch_parser.add_argument("--json", action="store_true", help="Output results in JSON format")
+
+    # Top-level arguments for direct single-trial or batch evaluation
     parser.add_argument("-i", "--interactive", action="store_true", help="Launch interactive checklist auditor")
     parser.add_argument("--json", action="store_true", help="Output results in structured JSON format")
     parser.add_argument("--csv", type=str, help="Path to batch CSV file containing trial evaluations")
     parser.add_argument("--trial-id", type=str, default="TRIAL-001", help="Trial identifier")
     parser.add_argument("--title", type=str, default="Evaluated Clinical Trial", help="Trial manuscript title")
     parser.add_argument("--responses-json", type=str, help="JSON string or file path containing item response mappings")
-    parser.add_argument("--full-compliance", action="store_true", help="Benchmark: Evaluate with 100% full compliance on all items")
+    parser.add_argument("--full-compliance", action="store_true", help="Benchmark: Evaluate with 100%% full compliance on all items")
 
     args = parser.parse_args()
 
+    # Handle batch subcommand
+    if args.subcommand == "batch":
+        run_batch_evaluation(input_path=args.input, output_path=args.output, json_format=args.json)
+        return
+
+    # Handle --csv flag on top-level
     if args.csv:
-        if not os.path.exists(args.csv):
-            print(f"Error: CSV file '{args.csv}' not found.", file=sys.stderr)
-            sys.exit(1)
-        with open(args.csv, "r", encoding="utf-8") as f:
-            csv_text = f.read()
-        reports = ConsortEvaluatorEngine.evaluate_batch_csv(csv_text)
-        if args.json:
-            print(json.dumps([r.to_dict() for r in reports], indent=2))
-        else:
-            for rep in reports:
-                print(format_report_text(rep))
-                print("\n")
+        run_batch_evaluation(input_path=args.csv, output_path=None, json_format=args.json)
         return
 
     if args.interactive:
@@ -201,3 +269,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
