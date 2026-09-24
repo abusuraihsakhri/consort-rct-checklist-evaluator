@@ -1,5 +1,7 @@
 # CONSORT RCT Checklist Evaluator
 
+### [Open the Live Application →](https://abusuraihsakhri.github.io/consort-rct-checklist-evaluator/)
+
 A browser and command-line checklist for reviewing randomized-trial reports against **CONSORT 2025**. The current standard contains 30 numbered items; this repository represents them as 42 scored entries where the checklist contains lettered sub-items.
 
 ## What it does
