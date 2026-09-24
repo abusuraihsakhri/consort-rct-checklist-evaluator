@@ -1,86 +1,109 @@
 #!/usr/bin/env python3
-"""
-CONSORT 2010 Statement RCT Reporting Checklist Evaluator & Flow Diagram Auditor
---------------------------------------------------------------------------------
-Comprehensive clinical trial reporting evaluation engine implementing the CONSORT 2010
-25-item checklist (37 sub-items), section-by-section compliance scoring, participant
-flow diagram conservation arithmetic, and Cochrane Risk of Bias (RoB 2.0) domain mapping.
+"""CONSORT 2025 reporting checklist evaluator and participant-flow validator.
 
-Domain: Clinical Research / Evidence-Based Medicine / Trial Methodologies
-Pure Python Standard Library (no external dependencies required).
+The scoring implemented here is a repository-defined completion aid. CONSORT 2025 does
+not prescribe a numeric manuscript score, and checklist completion is not a Cochrane
+RoB 2 risk-of-bias assessment.
 """
 
-from dataclasses import dataclass, field, asdict
-from typing import Dict, Any, List, Optional, Tuple, Union
-import json
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+from typing import Any, Dict, List, Optional
 import csv
-import io
-import sys
 import datetime
+import io
+import json
 
 
-# CONSORT Checklist Item Definitions
-CONSORT_TAXONOMY = {
-    "1a": {"section": "TITLE_ABSTRACT", "title": "Identification as a randomised trial in the title", "rob_domain": None},
-    "1b": {"section": "TITLE_ABSTRACT", "title": "Structured summary of trial design, methods, results, and conclusions", "rob_domain": None},
-    "2a": {"section": "INTRODUCTION", "title": "Scientific background and rationale", "rob_domain": None},
-    "2b": {"section": "INTRODUCTION", "title": "Specific objectives or hypotheses", "rob_domain": None},
-    "3a": {"section": "METHODS", "title": "Description of trial design (allocation ratio, parallel/factorial)", "rob_domain": "D1_RANDOMISATION"},
-    "3b": {"section": "METHODS", "title": "Important changes to methods after trial commencement with reasons", "rob_domain": "D2_DEVIATIONS"},
-    "4a": {"section": "METHODS", "title": "Eligibility criteria for participants", "rob_domain": None},
-    "4b": {"section": "METHODS", "title": "Settings and locations where the data were collected", "rob_domain": None},
-    "5":  {"section": "METHODS", "title": "Interventions for each group with sufficient details for replication", "rob_domain": "D2_DEVIATIONS"},
-    "6a": {"section": "METHODS", "title": "Completely defined pre-specified primary and secondary outcome measures", "rob_domain": "D4_MEASUREMENT"},
-    "6b": {"section": "METHODS", "title": "Any changes to trial outcomes after trial commenced with reasons", "rob_domain": "D5_REPORTED_RESULT"},
-    "7a": {"section": "METHODS", "title": "Sample size determination and power calculation parameters", "rob_domain": None},
-    "7b": {"section": "METHODS", "title": "Interim analyses explanation and formal stopping guidelines", "rob_domain": "D2_DEVIATIONS"},
-    "8a": {"section": "METHODS", "title": "Method used to generate random allocation sequence", "rob_domain": "D1_RANDOMISATION"},
-    "8b": {"section": "METHODS", "title": "Type of randomisation (blocking, stratification)", "rob_domain": "D1_RANDOMISATION"},
-    "9":  {"section": "METHODS", "title": "Allocation concealment mechanism (centralised, sealed envelopes)", "rob_domain": "D1_RANDOMISATION"},
-    "10": {"section": "METHODS", "title": "Implementation: sequence generator, participant enroller, assigner", "rob_domain": "D1_RANDOMISATION"},
-    "11a":{"section": "METHODS", "title": "Blinding procedure (participants, providers, outcome assessors)", "rob_domain": "D2_DEVIATIONS"},
-    "11b":{"section": "METHODS", "title": "Similarity of interventions for active vs comparator", "rob_domain": "D2_DEVIATIONS"},
-    "12a":{"section": "METHODS", "title": "Statistical methods used to compare groups for primary/secondary outcomes", "rob_domain": "D5_REPORTED_RESULT"},
-    "12b":{"section": "METHODS", "title": "Methods for additional analyses (subgroup, adjusted analyses)", "rob_domain": "D5_REPORTED_RESULT"},
-    "13a":{"section": "RESULTS", "title": "Participant flow numbers by group (assigned, received, analysed)", "rob_domain": "D3_MISSING_DATA"},
-    "13b":{"section": "RESULTS", "title": "Losses and exclusions after randomisation with documented reasons", "rob_domain": "D3_MISSING_DATA"},
-    "14a":{"section": "RESULTS", "title": "Dates defining periods of recruitment and follow-up", "rob_domain": None},
-    "14b":{"section": "RESULTS", "title": "Why the trial ended or was stopped early", "rob_domain": "D2_DEVIATIONS"},
-    "15": {"section": "RESULTS", "title": "Baseline demographic and clinical characteristics for each group", "rob_domain": "D1_RANDOMISATION"},
-    "16": {"section": "RESULTS", "title": "Number of participants included in each analysis and ITT adherence", "rob_domain": "D3_MISSING_DATA"},
-    "17a":{"section": "RESULTS", "title": "Effect size and precision (95% CI) for primary and secondary outcomes", "rob_domain": "D4_MEASUREMENT"},
-    "17b":{"section": "RESULTS", "title": "Absolute and relative effect sizes for binary outcomes", "rob_domain": "D4_MEASUREMENT"},
-    "18": {"section": "RESULTS", "title": "Results of ancillary analyses (subgroup, exploratory)", "rob_domain": "D5_REPORTED_RESULT"},
-    "19": {"section": "RESULTS", "title": "All important harms or unintended effects in each group", "rob_domain": "D2_DEVIATIONS"},
-    "20": {"section": "DISCUSSION", "title": "Trial limitations addressing sources of potential bias and imprecision", "rob_domain": "D3_MISSING_DATA"},
-    "21": {"section": "DISCUSSION", "title": "Generalisability (external validity) of the trial findings", "rob_domain": None},
-    "22": {"section": "DISCUSSION", "title": "Interpretation consistent with results balancing benefits and harms", "rob_domain": None},
-    "23": {"section": "OTHER_INFO", "title": "Registration number and name of trial registry (e.g. ClinicalTrials.gov)", "rob_domain": "D5_REPORTED_RESULT"},
-    "24": {"section": "OTHER_INFO", "title": "Where the full trial protocol can be accessed", "rob_domain": "D5_REPORTED_RESULT"},
-    "25": {"section": "OTHER_INFO", "title": "Sources of funding and role of funders", "rob_domain": None},
+STANDARD_VERSION = "CONSORT 2025"
+STANDARD_URL = "https://www.bmj.com/content/389/bmj-2024-081123"
+METHODOLOGICAL_NOTE = (
+    "The percentage and completeness bands are repository-defined reporting aids, not "
+    "official CONSORT scores, trial-quality ratings, or Cochrane RoB 2 judgements."
+)
+
+
+CONSORT_TAXONOMY: Dict[str, Dict[str, str]] = {
+    "1a": {"section": "TITLE_ABSTRACT", "title": "Identify the study as a randomised trial in the title"},
+    "1b": {"section": "TITLE_ABSTRACT", "title": "Provide a structured summary of trial design, methods, results, and conclusions"},
+    "2": {"section": "OPEN_SCIENCE", "title": "Report trial registry name, registration identifier or URL, and registration date"},
+    "3": {"section": "OPEN_SCIENCE", "title": "State where the trial protocol and statistical analysis plan can be accessed"},
+    "4": {"section": "OPEN_SCIENCE", "title": "State where and how de-identified participant data, code, and other materials can be accessed"},
+    "5a": {"section": "OPEN_SCIENCE", "title": "Report sources of financial and other support and the role of funders or sponsors"},
+    "5b": {"section": "OPEN_SCIENCE", "title": "Report financial and other conflicts of interest of manuscript authors"},
+    "6": {"section": "INTRODUCTION", "title": "Describe the scientific background and rationale"},
+    "7": {"section": "INTRODUCTION", "title": "State specific objectives or hypotheses relating to benefits and harms"},
+    "8": {"section": "METHODS", "title": "Describe patient and/or public involvement in trial design, conduct, or reporting"},
+    "9": {"section": "METHODS", "title": "Describe trial design, allocation ratio, and framework (for example superiority or non-inferiority)"},
+    "10": {"section": "METHODS", "title": "Report important changes after trial commencement, including non-prespecified outcomes or analyses, with reasons"},
+    "11": {"section": "METHODS", "title": "Describe settings and locations where the trial was conducted"},
+    "12a": {"section": "METHODS", "title": "Report eligibility criteria for participants"},
+    "12b": {"section": "METHODS", "title": "If applicable, report eligibility criteria for sites and individuals delivering interventions"},
+    "13": {"section": "METHODS", "title": "Describe intervention and comparator in enough detail for replication and link additional materials if relevant"},
+    "14": {"section": "METHODS", "title": "Define prespecified primary and secondary outcomes, including measurement, analysis metric, aggregation, and time point"},
+    "15": {"section": "METHODS", "title": "Describe how harms and other unintended effects were defined and assessed"},
+    "16a": {"section": "METHODS", "title": "Explain sample-size determination and all supporting assumptions"},
+    "16b": {"section": "METHODS", "title": "Explain interim analyses and stopping guidelines, if applicable"},
+    "17a": {"section": "METHODS", "title": "State who generated the random allocation sequence and how it was generated"},
+    "17b": {"section": "METHODS", "title": "Describe the type of randomisation and any restrictions such as stratification or blocking"},
+    "18": {"section": "METHODS", "title": "Describe the mechanism used to conceal allocation until assignment"},
+    "19": {"section": "METHODS", "title": "Describe implementation of randomisation and who had access to the allocation sequence"},
+    "20a": {"section": "METHODS", "title": "State who was blinded after assignment to interventions"},
+    "20b": {"section": "METHODS", "title": "If blinding was used, describe how it was achieved and the similarity of interventions"},
+    "21a": {"section": "METHODS", "title": "Describe statistical methods for primary and secondary outcomes, including harms"},
+    "21b": {"section": "METHODS", "title": "Define who was included in each analysis and in which randomised group"},
+    "21c": {"section": "METHODS", "title": "Describe how missing data were handled in the analysis"},
+    "21d": {"section": "METHODS", "title": "Describe additional analyses and distinguish prespecified from post-hoc analyses"},
+    "22a": {"section": "RESULTS", "title": "For each group, report numbers randomised, receiving intended intervention, and analysed"},
+    "22b": {"section": "RESULTS", "title": "For each group, report losses and exclusions after randomisation with reasons"},
+    "23a": {"section": "RESULTS", "title": "Report dates defining recruitment and follow-up periods"},
+    "23b": {"section": "RESULTS", "title": "Explain why the trial ended or was stopped, if applicable"},
+    "24a": {"section": "RESULTS", "title": "Describe how intervention and comparator were actually administered, including adherence and fidelity where relevant"},
+    "24b": {"section": "RESULTS", "title": "Report concomitant care received during the trial for each group"},
+    "25": {"section": "RESULTS", "title": "Provide baseline demographic and clinical characteristics for each group"},
+    "26": {"section": "RESULTS", "title": "For each primary and secondary outcome, report analysed and available-data counts, group results, effect estimates, and precision"},
+    "27": {"section": "RESULTS", "title": "Report all important harms or unintended effects in each group"},
+    "28": {"section": "RESULTS", "title": "Report ancillary analyses and distinguish prespecified from post-hoc analyses"},
+    "29": {"section": "DISCUSSION", "title": "Interpret results consistently with the evidence, balancing benefits and harms and considering other evidence"},
+    "30": {"section": "DISCUSSION", "title": "Discuss trial limitations, including potential bias, imprecision, generalisability, and multiplicity where relevant"},
 }
+
+SECTION_LABELS = {
+    "TITLE_ABSTRACT": "Title & abstract",
+    "OPEN_SCIENCE": "Open science",
+    "INTRODUCTION": "Introduction",
+    "METHODS": "Methods",
+    "RESULTS": "Results",
+    "DISCUSSION": "Discussion",
+}
+
+_FULL_VALUES = {"2", "FULL", "FULLY_REPORTED", "YES", "TRUE", "Y", "F"}
+_PARTIAL_VALUES = {"1", "PARTIAL", "PARTIALLY_REPORTED", "P"}
+_NO_VALUES = {"0", "NO", "NOT_REPORTED", "N", "FALSE"}
+_NA_VALUES = {"NA", "N/A", "NOT_APPLICABLE", "NOT APPLICABLE"}
 
 
 @dataclass
 class FlowDiagramArm:
-    """Participant counts for a single trial arm."""
+    """Participant counts for one trial arm."""
     arm_name: str = "Intervention"
     allocated: int = 100
     received_allocated_intervention: int = 98
     did_not_receive_intervention: int = 2
-    did_not_receive_reasons: List[str] = field(default_factory=lambda: ["Consent withdrawn before dose"])
+    did_not_receive_reasons: List[str] = field(default_factory=list)
     lost_to_followup: int = 3
-    lost_to_followup_reasons: List[str] = field(default_factory=lambda: ["Relocated"])
+    lost_to_followup_reasons: List[str] = field(default_factory=list)
     discontinued_intervention: int = 5
-    discontinued_reasons: List[str] = field(default_factory=lambda: ["Adverse event"])
+    discontinued_reasons: List[str] = field(default_factory=list)
     analysed_for_primary_outcome: int = 95
     excluded_from_analysis: int = 5
-    excluded_from_analysis_reasons: List[str] = field(default_factory=lambda: ["Protocol violation"])
+    excluded_from_analysis_reasons: List[str] = field(default_factory=list)
 
 
 @dataclass
 class FlowDiagramCounts:
-    """Consolidated participant flow metrics across all stages."""
+    """Participant-flow counts across enrolment, allocation, follow-up, and analysis."""
     assessed_for_eligibility: int = 250
     excluded_total: int = 50
     excluded_not_meeting_criteria: int = 35
@@ -92,21 +115,23 @@ class FlowDiagramCounts:
 
 @dataclass
 class FlowValidationResult:
-    """Conservation arithmetic and consistency check results for flow diagram."""
+    """Arithmetic and internal-consistency checks for reported participant flow."""
     is_mathematically_conserved: bool
     enrollment_discrepancy: int
     allocation_discrepancy: int
     arm_discrepancies: List[Dict[str, Any]] = field(default_factory=list)
-    intention_to_treat_ratio: float = 1.0  # analysed / allocated
+    analysis_coverage_ratio: float = 0.0
+    intention_to_treat_ratio: float = 0.0
     validation_flags: List[str] = field(default_factory=list)
 
 
 @dataclass
 class SectionScore:
-    """Compliance breakdown for a single CONSORT section."""
+    """Repository-defined reporting completion summary for one checklist section."""
     section_name: str
     points_awarded: int
     points_max: int
+    completion_percentage: float
     compliance_percentage: float
     items_fully_reported: int
     items_partially_reported: int
@@ -116,30 +141,34 @@ class SectionScore:
 
 @dataclass
 class RiskOfBiasDomainEvaluation:
-    """Cochrane RoB 2.0 domain score derived from CONSORT reporting items."""
-    domain_id: str  # D1_RANDOMISATION, D2_DEVIATIONS, D3_MISSING_DATA, D4_MEASUREMENT, D5_REPORTED_RESULT
+    """Deprecated v2 compatibility type; v3 does not populate this type."""
+    domain_id: str
     domain_title: str
     items_evaluated: List[str]
     domain_score_percentage: float
-    risk_level: str  # 'LOW_RISK', 'SOME_CONCERNS', 'HIGH_RISK'
+    risk_level: str
     concerns: List[str] = field(default_factory=list)
     recommendations: List[str] = field(default_factory=list)
 
 
 @dataclass
 class ConsortAuditReport:
-    """Unified comprehensive CONSORT evaluation report."""
+    """Structured CONSORT 2025 reporting-completeness report."""
     trial_id: str
     trial_title: str
+    standard_version: str
     timestamp_utc: str
+    overall_completion_percentage: float
     overall_compliance_percentage: float
-    overall_quality_tier: str  # 'HIGH_QUALITY', 'ACCEPTABLE_MODERATE', 'SUBSTANDARD_LOW'
+    reporting_completeness_band: str
+    overall_quality_tier: str
     total_points_awarded: int
     total_points_max: int
     section_scores: Dict[str, SectionScore]
     flow_validation: Optional[FlowValidationResult]
     risk_of_bias_evaluation: List[RiskOfBiasDomainEvaluation]
     actionable_remediation_items: List[Dict[str, Any]]
+    methodological_note: str = METHODOLOGICAL_NOTE
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -149,270 +178,276 @@ class ConsortAuditReport:
 
 
 class ConsortEvaluatorEngine:
-    """
-    Core engine for auditing RCT manuscripts and protocols against CONSORT 2010 standards,
-    evaluating flow diagram mathematical invariants, and mapping to Cochrane RoB 2.0.
-    """
+    """Evaluate CONSORT 2025 reporting completion and participant-flow arithmetic."""
+
+    @staticmethod
+    def normalize_response(value: Any, *, item_key: str = "") -> tuple[int, int, str]:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            raw = "NO"
+        else:
+            raw = str(value).upper().strip()
+
+        if raw in _FULL_VALUES:
+            return 2, 2, "FULLY_REPORTED"
+        if raw in _PARTIAL_VALUES:
+            return 1, 2, "PARTIALLY_REPORTED"
+        if raw in _NO_VALUES:
+            return 0, 2, "NOT_REPORTED"
+        if raw in _NA_VALUES:
+            return 0, 0, "NOT_APPLICABLE"
+
+        prefix = f" for CONSORT item {item_key}" if item_key else ""
+        raise ValueError(
+            f"Invalid checklist response{prefix}: {value!r}. "
+            "Use FULL, PARTIAL, NO, or NA."
+        )
 
     @classmethod
     def evaluate_checklist_responses(
         cls,
-        responses: Dict[str, str],  # item_key -> 'FULL', 'PARTIAL', 'NO', 'NA' (or 2, 1, 0)
+        responses: Dict[str, Any],
         trial_id: str = "TRIAL-001",
         trial_title: str = "Randomised Controlled Trial Assessment",
-        flow_counts: Optional[FlowDiagramCounts] = None
+        flow_counts: Optional[FlowDiagramCounts] = None,
     ) -> ConsortAuditReport:
-        """
-        Evaluate full 25-item checklist responses, calculate scores, and generate audit report.
-        """
-        section_groups: Dict[str, List[Dict[str, Any]]] = {}
-        rob_groups: Dict[str, List[Dict[str, Any]]] = {
-            "D1_RANDOMISATION": [],
-            "D2_DEVIATIONS": [],
-            "D3_MISSING_DATA": [],
-            "D4_MEASUREMENT": [],
-            "D5_REPORTED_RESULT": [],
-        }
+        unknown_items = sorted(set(responses) - set(CONSORT_TAXONOMY))
+        if unknown_items:
+            raise ValueError(f"Unknown CONSORT 2025 item key(s): {', '.join(unknown_items)}")
 
-        remediation_items = []
+        section_groups: Dict[str, List[Dict[str, Any]]] = {}
+        remediation_items: List[Dict[str, Any]] = []
         total_awarded = 0
         total_max = 0
 
-        # Initialize section trackers
         for item_key, item_info in CONSORT_TAXONOMY.items():
-            sec = item_info["section"]
-            if sec not in section_groups:
-                section_groups[sec] = []
+            section = item_info["section"]
+            section_groups.setdefault(section, [])
+            points, max_points, status = cls.normalize_response(
+                responses.get(item_key), item_key=item_key
+            )
 
-            raw_resp = str(responses.get(item_key, "NO")).upper().strip()
-            # Map response to score
-            if raw_resp in ["2", "FULL", "FULLY_REPORTED", "YES", "TRUE"]:
-                points = 2
-                max_pts = 2
-                status = "FULLY_REPORTED"
-            elif raw_resp in ["1", "PARTIAL", "PARTIALLY_REPORTED"]:
-                points = 1
-                max_pts = 2
-                status = "PARTIALLY_REPORTED"
-                remediation_items.append({
-                    "item": item_key,
-                    "title": item_info["title"],
-                    "section": sec,
-                    "status": status,
-                    "deficiency": "Item is only partially described; expand methodology or data reporting.",
-                })
-            elif raw_resp in ["NA", "N/A", "NOT_APPLICABLE"]:
-                points = 0
-                max_pts = 0
-                status = "NOT_APPLICABLE"
-            else:
-                points = 0
-                max_pts = 2
-                status = "NOT_REPORTED"
-                remediation_items.append({
-                    "item": item_key,
-                    "title": item_info["title"],
-                    "section": sec,
-                    "status": status,
-                    "deficiency": "Item is omitted from report; required for CONSORT 2010 compliance.",
-                })
+            if status in {"PARTIALLY_REPORTED", "NOT_REPORTED"}:
+                remediation_items.append(
+                    {
+                        "item": item_key,
+                        "title": item_info["title"],
+                        "section": section,
+                        "status": status,
+                        "deficiency": (
+                            "Reporting is incomplete; add the information required by this CONSORT 2025 item."
+                            if status == "PARTIALLY_REPORTED"
+                            else "This CONSORT 2025 reporting item was not reported."
+                        ),
+                    }
+                )
 
             item_record = {
                 "item": item_key,
                 "title": item_info["title"],
-                "section": sec,
+                "section": section,
                 "points": points,
-                "max_points": max_pts,
-                "status": status
+                "max_points": max_points,
+                "status": status,
             }
-
-            section_groups[sec].append(item_record)
+            section_groups[section].append(item_record)
             total_awarded += points
-            total_max += max_pts
+            total_max += max_points
 
-            # Map to Cochrane RoB
-            rob_d = item_info["rob_domain"]
-            if rob_d and rob_d in rob_groups and max_pts > 0:
-                rob_groups[rob_d].append(item_record)
-
-        # Compute Section Scores
         section_score_map: Dict[str, SectionScore] = {}
-        for sec_name, items in section_groups.items():
-            s_awarded = sum(i["points"] for i in items)
-            s_max = sum(i["max_points"] for i in items)
-            s_pct = (s_awarded / s_max * 100.0) if s_max > 0 else 100.0
-            
-            section_score_map[sec_name] = SectionScore(
-                section_name=sec_name,
-                points_awarded=s_awarded,
-                points_max=s_max,
-                compliance_percentage=round(s_pct, 1),
-                items_fully_reported=sum(1 for i in items if i["status"] == "FULLY_REPORTED"),
-                items_partially_reported=sum(1 for i in items if i["status"] == "PARTIALLY_REPORTED"),
-                items_not_reported=sum(1 for i in items if i["status"] == "NOT_REPORTED"),
-                items_not_applicable=sum(1 for i in items if i["status"] == "NOT_APPLICABLE")
+        for section_name, items in section_groups.items():
+            awarded = sum(item["points"] for item in items)
+            maximum = sum(item["max_points"] for item in items)
+            percentage = round((awarded / maximum * 100.0) if maximum else 100.0, 1)
+            section_score_map[section_name] = SectionScore(
+                section_name=section_name,
+                points_awarded=awarded,
+                points_max=maximum,
+                completion_percentage=percentage,
+                compliance_percentage=percentage,
+                items_fully_reported=sum(i["status"] == "FULLY_REPORTED" for i in items),
+                items_partially_reported=sum(i["status"] == "PARTIALLY_REPORTED" for i in items),
+                items_not_reported=sum(i["status"] == "NOT_REPORTED" for i in items),
+                items_not_applicable=sum(i["status"] == "NOT_APPLICABLE" for i in items),
             )
 
-        # Overall Compliance
-        overall_pct = (total_awarded / total_max * 100.0) if total_max > 0 else 0.0
-        overall_pct = round(overall_pct, 1)
-
-        if overall_pct >= 85.0:
-            quality_tier = "HIGH_QUALITY"
-        elif overall_pct >= 65.0:
-            quality_tier = "ACCEPTABLE_MODERATE"
+        overall = round((total_awarded / total_max * 100.0) if total_max else 0.0, 1)
+        if overall >= 85.0:
+            band = "HIGH_COMPLETENESS"
+        elif overall >= 65.0:
+            band = "MODERATE_COMPLETENESS"
         else:
-            quality_tier = "SUBSTANDARD_LOW"
+            band = "LOW_COMPLETENESS"
 
-        # Evaluate Cochrane Risk of Bias Domains
-        rob_evaluations = cls.evaluate_rob_domains(rob_groups)
-
-        # Validate Participant Flow if provided
-        flow_result = None
-        if flow_counts:
-            flow_result = cls.validate_participant_flow(flow_counts)
+        flow_result = cls.validate_participant_flow(flow_counts) if flow_counts else None
 
         return ConsortAuditReport(
-            trial_id=trial_id,
-            trial_title=trial_title,
+            trial_id=str(trial_id),
+            trial_title=str(trial_title),
+            standard_version=STANDARD_VERSION,
             timestamp_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            overall_compliance_percentage=overall_pct,
-            overall_quality_tier=quality_tier,
+            overall_completion_percentage=overall,
+            overall_compliance_percentage=overall,
+            reporting_completeness_band=band,
+            overall_quality_tier=band,
             total_points_awarded=total_awarded,
             total_points_max=total_max,
             section_scores=section_score_map,
             flow_validation=flow_result,
-            risk_of_bias_evaluation=rob_evaluations,
-            actionable_remediation_items=remediation_items
+            risk_of_bias_evaluation=[],
+            actionable_remediation_items=remediation_items,
         )
 
     @classmethod
-    def evaluate_rob_domains(cls, rob_groups: Dict[str, List[Dict[str, Any]]]) -> List[RiskOfBiasDomainEvaluation]:
-        """Map CONSORT checklist items to Cochrane RoB 2.0 5-domain risk matrix."""
-        domain_titles = {
-            "D1_RANDOMISATION": "Domain 1: Risk of bias arising from the randomisation process",
-            "D2_DEVIATIONS": "Domain 2: Risk of bias due to deviations from the intended interventions",
-            "D3_MISSING_DATA": "Domain 3: Missing outcome data",
-            "D4_MEASUREMENT": "Domain 4: Risk of bias in measurement of the outcome",
-            "D5_REPORTED_RESULT": "Domain 5: Risk of bias in selection of the reported result"
-        }
-
-        results = []
-        for dom_id, items in rob_groups.items():
-            awarded = sum(i["points"] for i in items)
-            max_p = sum(i["max_points"] for i in items)
-            score_pct = (awarded / max_p * 100.0) if max_p > 0 else 100.0
-
-            concerns = []
-            recs = []
-
-            for itm in items:
-                if itm["status"] == "NOT_REPORTED":
-                    concerns.append(f"Item {itm['item']} ({itm['title']}) is omitted.")
-                elif itm["status"] == "PARTIALLY_REPORTED":
-                    concerns.append(f"Item {itm['item']} ({itm['title']}) lacks complete procedural detail.")
-
-            if score_pct >= 80.0:
-                risk = "LOW_RISK"
-            elif score_pct >= 50.0:
-                risk = "SOME_CONCERNS"
-                recs.append("Clarify methodology and supply missing protocol appendices to resolve domain ambiguity.")
-            else:
-                risk = "HIGH_RISK"
-                recs.append("Critical methodological reporting failure. Supply explicit sequence generation, concealment, or outcome details.")
-
-            results.append(RiskOfBiasDomainEvaluation(
-                domain_id=dom_id,
-                domain_title=domain_titles.get(dom_id, dom_id),
-                items_evaluated=[i["item"] for i in items],
-                domain_score_percentage=round(score_pct, 1),
-                risk_level=risk,
-                concerns=concerns,
-                recommendations=recs
-            ))
-        return results
+    def evaluate_rob_domains(cls, _rob_groups: Dict[str, List[Dict[str, Any]]]) -> List[RiskOfBiasDomainEvaluation]:
+        """Deprecated compatibility method; deliberately returns no RoB 2 judgements."""
+        return []
 
     @staticmethod
-    def validate_participant_flow(flow: FlowDiagramCounts) -> FlowValidationResult:
-        """
-        Validate mathematical conservation of participant counts across all 4 CONSORT stages.
-        """
-        flags = []
-        
-        # 1. Enrollment Conservation
-        calc_excluded = flow.excluded_not_meeting_criteria + flow.excluded_declined_consent + flow.excluded_other_reasons
+    def _count_is_valid(value: Any) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+    @classmethod
+    def validate_participant_flow(cls, flow: FlowDiagramCounts) -> FlowValidationResult:
+        """Check reported participant-flow counts for arithmetic consistency."""
+        flags: List[str] = []
+        arm_issues: List[Dict[str, Any]] = []
+
+        top_level = {
+            "assessed_for_eligibility": flow.assessed_for_eligibility,
+            "excluded_total": flow.excluded_total,
+            "excluded_not_meeting_criteria": flow.excluded_not_meeting_criteria,
+            "excluded_declined_consent": flow.excluded_declined_consent,
+            "excluded_other_reasons": flow.excluded_other_reasons,
+            "randomised_total": flow.randomised_total,
+        }
+        for name, value in top_level.items():
+            if not cls._count_is_valid(value):
+                flags.append(f"Invalid count: {name} must be a non-negative integer (got {value!r}).")
+
+        calc_excluded = (
+            flow.excluded_not_meeting_criteria
+            + flow.excluded_declined_consent
+            + flow.excluded_other_reasons
+        )
         if calc_excluded != flow.excluded_total:
-            flags.append(f"Enrollment Error: Sum of sub-exclusions ({calc_excluded}) != total excluded ({flow.excluded_total}).")
+            flags.append(
+                f"Enrollment mismatch: exclusion subcategories sum to {calc_excluded}, "
+                f"but excluded_total is {flow.excluded_total}."
+            )
 
-        enroll_discrepancy = flow.assessed_for_eligibility - (flow.randomised_total + flow.excluded_total)
-        if enroll_discrepancy != 0:
-            flags.append(f"Enrollment Error: Assessed ({flow.assessed_for_eligibility}) != Randomised ({flow.randomised_total}) + Excluded ({flow.excluded_total}) [Discrepancy: {enroll_discrepancy}].")
+        enrollment_discrepancy = flow.assessed_for_eligibility - (
+            flow.randomised_total + flow.excluded_total
+        )
+        if enrollment_discrepancy:
+            flags.append(
+                f"Enrollment mismatch: assessed ({flow.assessed_for_eligibility}) != "
+                f"randomised ({flow.randomised_total}) + excluded ({flow.excluded_total}); "
+                f"difference {enrollment_discrepancy}."
+            )
 
-        # 2. Allocation Conservation
-        sum_allocated = sum(a.allocated for a in flow.arms)
-        alloc_discrepancy = flow.randomised_total - sum_allocated
-        if alloc_discrepancy != 0:
-            flags.append(f"Allocation Error: Total randomised ({flow.randomised_total}) != Sum of arm allocations ({sum_allocated}).")
+        sum_allocated = sum(arm.allocated for arm in flow.arms)
+        allocation_discrepancy = flow.randomised_total - sum_allocated
+        if allocation_discrepancy:
+            flags.append(
+                f"Allocation mismatch: randomised ({flow.randomised_total}) != "
+                f"sum of arm allocations ({sum_allocated}); difference {allocation_discrepancy}."
+            )
 
-        # 3. Arm Conservation (Follow-up and Analysis)
-        arm_issues = []
         total_analysed = 0
         total_allocated = 0
+        for index, arm in enumerate(flow.arms, start=1):
+            arm_name = arm.arm_name or f"Arm {index}"
+            counts = {
+                "allocated": arm.allocated,
+                "received_allocated_intervention": arm.received_allocated_intervention,
+                "did_not_receive_intervention": arm.did_not_receive_intervention,
+                "lost_to_followup": arm.lost_to_followup,
+                "discontinued_intervention": arm.discontinued_intervention,
+                "analysed_for_primary_outcome": arm.analysed_for_primary_outcome,
+                "excluded_from_analysis": arm.excluded_from_analysis,
+            }
+            for name, value in counts.items():
+                if not cls._count_is_valid(value):
+                    msg = f"Arm '{arm_name}': {name} must be a non-negative integer (got {value!r})."
+                    flags.append(msg)
+                    arm_issues.append({"arm": arm_name, "issue": msg})
 
-        for arm in flow.arms:
             total_allocated += arm.allocated
             total_analysed += arm.analysed_for_primary_outcome
 
-            # Check allocation = received + did_not_receive
-            if arm.allocated != (arm.received_allocated_intervention + arm.did_not_receive_intervention):
-                msg = f"Arm '{arm.arm_name}': Allocated ({arm.allocated}) != Received ({arm.received_allocated_intervention}) + Did Not Receive ({arm.did_not_receive_intervention})."
+            if arm.allocated != arm.received_allocated_intervention + arm.did_not_receive_intervention:
+                msg = (
+                    f"Arm '{arm_name}': allocated ({arm.allocated}) != received "
+                    f"({arm.received_allocated_intervention}) + did not receive "
+                    f"({arm.did_not_receive_intervention})."
+                )
                 flags.append(msg)
-                arm_issues.append({"arm": arm.arm_name, "issue": msg})
+                arm_issues.append({"arm": arm_name, "issue": msg})
 
-            # Check analysed + excluded_from_analysis == completed/received
-            # Completed follow-up = received - lost - discontinued
-            completed_followup = arm.received_allocated_intervention - (arm.lost_to_followup + arm.discontinued_intervention)
-            if completed_followup < 0:
-                msg = f"Arm '{arm.arm_name}': Losses and discontinuations exceed received count."
+            if arm.analysed_for_primary_outcome > arm.allocated:
+                msg = (
+                    f"Arm '{arm_name}': analysed ({arm.analysed_for_primary_outcome}) "
+                    f"exceeds allocated ({arm.allocated})."
+                )
                 flags.append(msg)
-                arm_issues.append({"arm": arm.arm_name, "issue": msg})
+                arm_issues.append({"arm": arm_name, "issue": msg})
 
-        itt_ratio = (total_analysed / total_allocated) if total_allocated > 0 else 1.0
+            if arm.excluded_from_analysis > arm.allocated:
+                msg = (
+                    f"Arm '{arm_name}': excluded from analysis ({arm.excluded_from_analysis}) "
+                    f"exceeds allocated ({arm.allocated})."
+                )
+                flags.append(msg)
+                arm_issues.append({"arm": arm_name, "issue": msg})
 
-        if itt_ratio < 0.90:
-            flags.append(f"Attrition Warning: Intention-To-Treat analysis ratio is {itt_ratio * 100:.1f}% (< 90% analyzed). Risk of attrition bias.")
+            if arm.analysed_for_primary_outcome + arm.excluded_from_analysis > arm.allocated:
+                msg = (
+                    f"Arm '{arm_name}': analysed + excluded from analysis "
+                    f"({arm.analysed_for_primary_outcome + arm.excluded_from_analysis}) "
+                    f"exceeds allocated ({arm.allocated})."
+                )
+                flags.append(msg)
+                arm_issues.append({"arm": arm_name, "issue": msg})
 
-        is_conserved = (len(flags) == 0)
+        analysis_ratio = (total_analysed / total_allocated) if total_allocated > 0 else 0.0
+        analysis_ratio = round(analysis_ratio, 4)
 
         return FlowValidationResult(
-            is_mathematically_conserved=is_conserved,
-            enrollment_discrepancy=enroll_discrepancy,
-            allocation_discrepancy=alloc_discrepancy,
+            is_mathematically_conserved=not flags,
+            enrollment_discrepancy=enrollment_discrepancy,
+            allocation_discrepancy=allocation_discrepancy,
             arm_discrepancies=arm_issues,
-            intention_to_treat_ratio=round(itt_ratio, 4),
-            validation_flags=flags
+            analysis_coverage_ratio=analysis_ratio,
+            intention_to_treat_ratio=analysis_ratio,
+            validation_flags=flags,
         )
 
     @classmethod
     def evaluate_batch_csv(cls, csv_text: str) -> List[ConsortAuditReport]:
-        """Parse batch CSV where each row corresponds to a trial checklist evaluation."""
+        """Evaluate a CSV where each row is one CONSORT 2025 checklist."""
         reader = csv.DictReader(io.StringIO(csv_text))
-        reports = []
-        for idx, row in enumerate(reader):
-            t_id = row.get("trial_id", f"TRIAL-{idx+1}")
-            t_title = row.get("trial_title", "Evaluated Clinical Trial")
-            
-            # Extract item responses from row
-            responses = {}
-            for item_key in CONSORT_TAXONOMY.keys():
+        if reader.fieldnames is None:
+            raise ValueError("CSV input is missing a header row.")
+
+        reports: List[ConsortAuditReport] = []
+        for row_number, row in enumerate(reader, start=2):
+            trial_id = (row.get("trial_id") or f"TRIAL-{row_number - 1}").strip()
+            trial_title = (row.get("trial_title") or "Evaluated Clinical Trial").strip()
+            responses: Dict[str, Any] = {}
+            for item_key in CONSORT_TAXONOMY:
                 if item_key in row:
                     responses[item_key] = row[item_key]
                 elif f"item_{item_key}" in row:
                     responses[item_key] = row[f"item_{item_key}"]
 
-            reports.append(cls.evaluate_checklist_responses(
-                responses=responses,
-                trial_id=t_id,
-                trial_title=t_title
-            ))
+            try:
+                report = cls.evaluate_checklist_responses(
+                    responses=responses,
+                    trial_id=trial_id,
+                    trial_title=trial_title,
+                )
+            except ValueError as exc:
+                raise ValueError(f"CSV row {row_number}: {exc}") from exc
+            reports.append(report)
+
         return reports

@@ -1,272 +1,280 @@
 #!/usr/bin/env python3
-"""
-Command-Line Interface for CONSORT 2010 RCT Checklist Evaluator & Flow Auditor
-Supports interactive checklists, JSON/CSV batch auditing, flow diagram arithmetic, and structured reporting.
-"""
+"""Command-line interface for the CONSORT 2025 checklist evaluator."""
+
+from __future__ import annotations
 
 import argparse
 import csv
 import json
-import sys
-import os
 from pathlib import Path
-from typing import Optional
-
-# Add parent directory to path if needed
-sys.path.insert(0, str(Path(__file__).parent.resolve()))
+import sys
+from typing import Dict, Optional
 
 from consort_evaluator import (
-    ConsortEvaluatorEngine,
-    FlowDiagramCounts,
-    FlowDiagramArm,
-    ConsortAuditReport,
     CONSORT_TAXONOMY,
+    METHODOLOGICAL_NOTE,
+    SECTION_LABELS,
+    STANDARD_VERSION,
+    ConsortAuditReport,
+    ConsortEvaluatorEngine,
+    FlowDiagramArm,
+    FlowDiagramCounts,
 )
 
 
 def format_report_text(report: ConsortAuditReport) -> str:
-    """Format ConsortAuditReport into a human-readable clinical trial audit summary."""
-    lines = []
-    lines.append("=" * 80)
-    lines.append("CONSORT 2010 STATEMENT RCT REPORTING AUDIT REPORT")
-    lines.append(f"Trial ID: {report.trial_id:<20} Timestamp UTC: {report.timestamp_utc}")
-    lines.append(f"Title:    {report.trial_title}")
-    lines.append("=" * 80)
+    """Format a report for terminal output."""
 
-    # 1. Overall Compliance
-    lines.append("\n[1] OVERALL COMPLIANCE SUMMARY")
-    lines.append(f"  * Composite CONSORT Adherence: {report.overall_compliance_percentage:.1f}% ({report.total_points_awarded} / {report.total_points_max} points)")
-    lines.append(f"  * Quality Tier:                >>> {report.overall_quality_tier.replace('_', ' ')} <<<")
+    lines = [
+        "=" * 78,
+        f"{STANDARD_VERSION} REPORTING CHECKLIST EVALUATION",
+        f"Trial ID: {report.trial_id}",
+        f"Title:    {report.trial_title}",
+        "=" * 78,
+        f"Completion: {report.overall_completion_percentage:.1f}% "
+        f"({report.total_points_awarded}/{report.total_points_max} points)",
+        f"Band:       {report.reporting_completeness_band.replace('_', ' ').title()}",
+        "",
+        "SECTION COMPLETION",
+    ]
 
-    # 2. Sectional Compliance Breakdown
-    lines.append("\n[2] SECTION-BY-SECTION COMPLIANCE BREAKDOWN")
-    for sec_name, sec in report.section_scores.items():
-        bar_len = int(sec.compliance_percentage / 5)
-        bar = "#" * bar_len + "-" * (20 - bar_len)
-        lines.append(f"  * {sec_name:<16} [{bar}] {sec.compliance_percentage:5.1f}% ({sec.points_awarded:2d}/{sec.points_max:2d} pts) [Full:{sec.items_fully_reported} Part:{sec.items_partially_reported} None:{sec.items_not_reported} NA:{sec.items_not_applicable}]")
+    for section_name, section in report.section_scores.items():
+        label = SECTION_LABELS.get(section_name, section_name)
+        lines.append(
+            f"  {label:<18} {section.completion_percentage:5.1f}% "
+            f"({section.points_awarded}/{section.points_max})"
+        )
 
-    # 3. Cochrane RoB 2.0 Mapping
-    lines.append("\n[3] COCHRANE RISK OF BIAS (RoB 2.0) MAPPING")
-    for rob in report.risk_of_bias_evaluation:
-        lines.append(f"  * {rob.domain_id} ({rob.domain_score_percentage:5.1f}%): >>> {rob.risk_level.replace('_', ' ')} <<<")
-        lines.append(f"    {rob.domain_title}")
-        if rob.concerns:
-            for c in rob.concerns[:3]:
-                lines.append(f"      [-] {c}")
-        if rob.recommendations:
-            for r in rob.recommendations:
-                lines.append(f"      [*] {r}")
+    if report.flow_validation is not None:
+        flow = report.flow_validation
+        lines.extend(
+            [
+                "",
+                "PARTICIPANT-FLOW ARITHMETIC",
+                f"  Consistent: {'yes' if flow.is_mathematically_conserved else 'no'}",
+                f"  Analysis coverage: {flow.analysis_coverage_ratio * 100:.1f}% "
+                "(analysed / allocated; descriptive only)",
+            ]
+        )
+        for flag in flow.validation_flags:
+            lines.append(f"  - {flag}")
 
-    # 4. Participant Flow Conservation
-    if report.flow_validation:
-        f = report.flow_validation
-        lines.append("\n[4] CONSORT PARTICIPANT FLOW CONSERVATION ARITHMETIC")
-        status = "MATHEMATICALLY CONSERVED" if f.is_mathematically_conserved else "CONSERVATION ANOMALIES DETECTED"
-        lines.append(f"  * Status:                      >>> {status} <<<")
-        lines.append(f"  * Intention-to-Treat Ratio:    {f.intention_to_treat_ratio * 100:.1f}% analysed of allocated")
-        if f.validation_flags:
-            for flag in f.validation_flags:
-                lines.append(f"    [!] {flag}")
-
-    # 5. Actionable Remediation Items
     if report.actionable_remediation_items:
-        lines.append("\n[5] PRIORITY ACTIONABLE REMEDIATIONS (Missing/Partial Items)")
-        for rem in report.actionable_remediation_items[:8]:
-            lines.append(f"  * [Item {rem['item']:<3}] {rem['title'][:55]}... ({rem['status']})")
-        if len(report.actionable_remediation_items) > 8:
-            lines.append(f"  * ... plus {len(report.actionable_remediation_items) - 8} more reporting recommendations.")
+        lines.extend(["", "REPORTING GAPS (first 10)"])
+        for item in report.actionable_remediation_items[:10]:
+            lines.append(f"  - Item {item['item']}: {item['title']} [{item['status']}]")
+        remaining = len(report.actionable_remediation_items) - 10
+        if remaining > 0:
+            lines.append(f"  - ... plus {remaining} additional gaps")
 
-    lines.append("=" * 80)
+    lines.extend(["", f"Note: {METHODOLOGICAL_NOTE}", "=" * 78])
     return "\n".join(lines)
 
 
-def run_interactive_mode() -> ConsortAuditReport:
-    """Prompt user interactively through key CONSORT checklist sections."""
-    print("\n--- Interactive CONSORT 2010 Checklist Evaluator ---")
-    trial_id = input("Trial Identifier [TRIAL-INTERACTIVE]: ").strip() or "TRIAL-INTERACTIVE"
-    trial_title = input("Trial Title [Phase 3 Randomized Clinical Trial]: ").strip() or "Phase 3 Randomized Clinical Trial"
-
-    print("\nFor each key item, enter status: [F]ully reported (2 pts), [P]artially reported (1 pt), [N]ot reported (0 pts), or [NA] (Not applicable).")
-    
-    responses = {}
-    key_items = ["1a", "1b", "2a", "2b", "3a", "4a", "5", "6a", "7a", "8a", "8b", "9", "10", "11a", "12a", "13a", "15", "16", "17a", "19", "20", "23", "25"]
-
-    for item_key in key_items:
-        info = CONSORT_TAXONOMY[item_key]
-        resp = input(f"Item {item_key:<3} ({info['section']:<12}) {info['title'][:45]} [F/p/n/na]: ").strip().upper()
-        if not resp or resp.startswith("F") or resp == "2":
-            responses[item_key] = "FULL"
-        elif resp.startswith("P") or resp == "1":
-            responses[item_key] = "PARTIAL"
-        elif resp.startswith("NA"):
-            responses[item_key] = "NA"
-        else:
-            responses[item_key] = "NO"
-
-    # Quick flow query
-    include_flow = input("\nAudit participant flow diagram numbers? (y/N): ").strip().lower() in ["y", "yes"]
-    flow_obj = None
-    if include_flow:
+def _prompt_nonnegative_int(label: str, default: int) -> int:
+    while True:
+        raw = input(f"{label} [{default}]: ").strip()
+        if not raw:
+            return default
         try:
-            assessed = int(input("  Assessed for eligibility: ") or "200")
-            excluded = int(input("  Excluded total: ") or "40")
-            randomised = int(input("  Randomised total: ") or "160")
-            arm1_alloc = int(input("  Arm 1 (Intervention) allocated: ") or "80")
-            arm1_analysed = int(input("  Arm 1 analysed: ") or "78")
-            arm2_alloc = int(input("  Arm 2 (Control) allocated: ") or "80")
-            arm2_analysed = int(input("  Arm 2 analysed: ") or "77")
-
-            arm1 = FlowDiagramArm(arm_name="Intervention", allocated=arm1_alloc, received_allocated_intervention=arm1_alloc, analysed_for_primary_outcome=arm1_analysed)
-            arm2 = FlowDiagramArm(arm_name="Control", allocated=arm2_alloc, received_allocated_intervention=arm2_alloc, analysed_for_primary_outcome=arm2_analysed)
-            flow_obj = FlowDiagramCounts(
-                assessed_for_eligibility=assessed,
-                excluded_total=excluded,
-                randomised_total=randomised,
-                arms=[arm1, arm2]
-            )
+            value = int(raw)
         except ValueError:
-            print("Invalid number entered; skipping flow audit.")
+            print("Enter a non-negative integer.")
+            continue
+        if value < 0:
+            print("Enter a non-negative integer.")
+            continue
+        return value
+
+
+def _prompt_arm(name: str, default_allocated: int) -> FlowDiagramArm:
+    print(f"\n{name}")
+    allocated = _prompt_nonnegative_int("  Allocated", default_allocated)
+    received = _prompt_nonnegative_int("  Received allocated intervention", allocated)
+    did_not_receive = _prompt_nonnegative_int(
+        "  Did not receive allocated intervention", max(allocated - received, 0)
+    )
+    lost = _prompt_nonnegative_int("  Lost to follow-up", 0)
+    discontinued = _prompt_nonnegative_int("  Discontinued intervention", 0)
+    analysed = _prompt_nonnegative_int("  Analysed for primary outcome", allocated)
+    excluded = _prompt_nonnegative_int("  Excluded from primary analysis", max(allocated - analysed, 0))
+    return FlowDiagramArm(
+        arm_name=name,
+        allocated=allocated,
+        received_allocated_intervention=received,
+        did_not_receive_intervention=did_not_receive,
+        lost_to_followup=lost,
+        discontinued_intervention=discontinued,
+        analysed_for_primary_outcome=analysed,
+        excluded_from_analysis=excluded,
+    )
+
+
+def run_interactive_mode() -> ConsortAuditReport:
+    """Prompt through every scored CONSORT 2025 checklist entry."""
+
+    print(f"\n--- Interactive {STANDARD_VERSION} Checklist Evaluator ---")
+    trial_id = input("Trial identifier [TRIAL-INTERACTIVE]: ").strip() or "TRIAL-INTERACTIVE"
+    trial_title = input("Trial title [Evaluated Randomised Trial]: ").strip() or "Evaluated Randomised Trial"
+    print("\nFor each item enter F (full), P (partial), N (not reported), or NA. Blank = N.")
+
+    responses: Dict[str, str] = {}
+    current_section = None
+    for item_key, info in CONSORT_TAXONOMY.items():
+        if info["section"] != current_section:
+            current_section = info["section"]
+            print(f"\n[{SECTION_LABELS.get(current_section, current_section)}]")
+        while True:
+            raw = input(f"{item_key:>3}  {info['title']} [F/P/N/NA]: ").strip() or "N"
+            try:
+                ConsortEvaluatorEngine.normalize_response(raw, item_key=item_key)
+            except ValueError as exc:
+                print(exc)
+                continue
+            responses[item_key] = raw
+            break
+
+    flow_counts = None
+    if input("\nValidate participant-flow arithmetic? [y/N]: ").strip().lower() in {"y", "yes"}:
+        assessed = _prompt_nonnegative_int("Assessed for eligibility", 250)
+        excluded = _prompt_nonnegative_int("Excluded total", 50)
+        not_eligible = _prompt_nonnegative_int("  Excluded: did not meet criteria", 35)
+        declined = _prompt_nonnegative_int("  Excluded: declined consent", 10)
+        other = _prompt_nonnegative_int("  Excluded: other reasons", max(excluded - not_eligible - declined, 0))
+        randomised = _prompt_nonnegative_int("Randomised total", max(assessed - excluded, 0))
+        half = randomised // 2
+        arms = [_prompt_arm("Intervention", half), _prompt_arm("Comparator", randomised - half)]
+        flow_counts = FlowDiagramCounts(
+            assessed_for_eligibility=assessed,
+            excluded_total=excluded,
+            excluded_not_meeting_criteria=not_eligible,
+            excluded_declined_consent=declined,
+            excluded_other_reasons=other,
+            randomised_total=randomised,
+            arms=arms,
+        )
 
     return ConsortEvaluatorEngine.evaluate_checklist_responses(
         responses=responses,
         trial_id=trial_id,
         trial_title=trial_title,
-        flow_counts=flow_obj
+        flow_counts=flow_counts,
     )
 
 
-def run_batch_evaluation(input_path: str, output_path: Optional[str] = None, json_format: bool = False):
-    """Execute batch audit across a CSV file of trial checklist responses."""
-    if not os.path.exists(input_path):
-        print(f"Error: CSV file '{input_path}' not found.", file=sys.stderr)
-        sys.exit(1)
+def run_batch_evaluation(
+    input_path: str, output_path: Optional[str] = None, json_format: bool = False
+) -> None:
+    """Evaluate a checklist CSV and optionally write a summary CSV or full JSON."""
 
-    with open(input_path, "r", encoding="utf-8") as f:
-        csv_text = f.read()
+    path = Path(input_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"CSV file not found: {input_path}")
 
-    reports = ConsortEvaluatorEngine.evaluate_batch_csv(csv_text)
-
+    reports = ConsortEvaluatorEngine.evaluate_batch_csv(path.read_text(encoding="utf-8"))
     if output_path:
-        out_file = Path(output_path)
-        out_file.parent.mkdir(parents=True, exist_ok=True)
-        if json_format or output_path.lower().endswith(".json"):
-            with open(out_file, "w", encoding="utf-8") as f:
-                json.dump([r.to_dict() for r in reports], f, indent=2)
+        destination = Path(output_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if json_format or destination.suffix.lower() == ".json":
+            destination.write_text(
+                json.dumps([report.to_dict() for report in reports], indent=2), encoding="utf-8"
+            )
         else:
-            # Output tabular CSV summary
-            fieldnames = [
+            fields = [
                 "trial_id",
                 "trial_title",
-                "overall_compliance_percentage",
-                "overall_quality_tier",
+                "standard_version",
+                "overall_completion_percentage",
+                "reporting_completeness_band",
                 "total_points_awarded",
                 "total_points_max",
-                "d1_randomisation_risk",
-                "d2_deviations_risk",
-                "d3_missing_data_risk",
-                "d4_measurement_risk",
-                "d5_reported_result_risk",
                 "actionable_remediations_count",
             ]
-            with open(out_file, "w", encoding="utf-8", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
+            with destination.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fields)
                 writer.writeheader()
-                for rep in reports:
-                    rob_map = {r.domain_id: r.risk_level for r in rep.risk_of_bias_evaluation}
-                    writer.writerow({
-                        "trial_id": rep.trial_id,
-                        "trial_title": rep.trial_title,
-                        "overall_compliance_percentage": rep.overall_compliance_percentage,
-                        "overall_quality_tier": rep.overall_quality_tier,
-                        "total_points_awarded": rep.total_points_awarded,
-                        "total_points_max": rep.total_points_max,
-                        "d1_randomisation_risk": rob_map.get("D1_RANDOMISATION", "UNKNOWN"),
-                        "d2_deviations_risk": rob_map.get("D2_DEVIATIONS", "UNKNOWN"),
-                        "d3_missing_data_risk": rob_map.get("D3_MISSING_DATA", "UNKNOWN"),
-                        "d4_measurement_risk": rob_map.get("D4_MEASUREMENT", "UNKNOWN"),
-                        "d5_reported_result_risk": rob_map.get("D5_REPORTED_RESULT", "UNKNOWN"),
-                        "actionable_remediations_count": len(rep.actionable_remediation_items),
-                    })
-        print(f"Successfully processed {len(reports)} trials. Output written to '{output_path}'.")
+                for report in reports:
+                    writer.writerow(
+                        {
+                            "trial_id": report.trial_id,
+                            "trial_title": report.trial_title,
+                            "standard_version": report.standard_version,
+                            "overall_completion_percentage": report.overall_completion_percentage,
+                            "reporting_completeness_band": report.reporting_completeness_band,
+                            "total_points_awarded": report.total_points_awarded,
+                            "total_points_max": report.total_points_max,
+                            "actionable_remediations_count": len(report.actionable_remediation_items),
+                        }
+                    )
+        print(f"Processed {len(reports)} trial(s). Output written to '{destination}'.")
+    elif json_format:
+        print(json.dumps([report.to_dict() for report in reports], indent=2))
     else:
-        if json_format:
-            print(json.dumps([r.to_dict() for r in reports], indent=2))
+        for report in reports:
+            print(format_report_text(report))
+            print()
+
+
+def _load_responses(value: str) -> Dict[str, str]:
+    path = Path(value)
+    try:
+        if path.is_file():
+            parsed = json.loads(path.read_text(encoding="utf-8"))
         else:
-            for rep in reports:
-                print(format_report_text(rep))
-                print("\n")
+            parsed = json.loads(value)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Could not parse --responses-json: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("--responses-json must contain a JSON object mapping item keys to statuses.")
+    return parsed
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
-        description="CONSORT 2010 Statement RCT Reporting Checklist & Flow Evaluator",
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        description=f"{STANDARD_VERSION} reporting checklist evaluator",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    subparsers = parser.add_subparsers(dest="subcommand")
+    batch = subparsers.add_parser("batch", help="Evaluate multiple trial checklists from CSV")
+    batch.add_argument("-i", "--input", required=True, help="Input CSV path")
+    batch.add_argument("-o", "--output", help="Output CSV or JSON path")
+    batch.add_argument("--json", action="store_true", help="Write/print full JSON reports")
 
-    subparsers = parser.add_subparsers(dest="subcommand", help="Available subcommands")
-
-    # Batch subcommand
-    batch_parser = subparsers.add_parser("batch", help="Batch evaluate multiple trials from a CSV file")
-    batch_parser.add_argument("-i", "--input", type=str, required=True, help="Input CSV file path containing trial checklists")
-    batch_parser.add_argument("-o", "--output", type=str, default=None, help="Output file path (CSV or JSON)")
-    batch_parser.add_argument("--json", action="store_true", help="Output results in JSON format")
-
-    # Top-level arguments for direct single-trial or batch evaluation
-    parser.add_argument("-i", "--interactive", action="store_true", help="Launch interactive checklist auditor")
-    parser.add_argument("--json", action="store_true", help="Output results in structured JSON format")
-    parser.add_argument("--csv", type=str, help="Path to batch CSV file containing trial evaluations")
-    parser.add_argument("--trial-id", type=str, default="TRIAL-001", help="Trial identifier")
-    parser.add_argument("--title", type=str, default="Evaluated Clinical Trial", help="Trial manuscript title")
-    parser.add_argument("--responses-json", type=str, help="JSON string or file path containing item response mappings")
-    parser.add_argument("--full-compliance", action="store_true", help="Benchmark: Evaluate with 100%% full compliance on all items")
+    parser.add_argument("-i", "--interactive", action="store_true", help="Run the interactive checklist")
+    parser.add_argument("--json", action="store_true", help="Print JSON")
+    parser.add_argument("--csv", help="Evaluate a batch CSV and print results")
+    parser.add_argument("--trial-id", default="TRIAL-001", help="Trial identifier")
+    parser.add_argument("--title", default="Evaluated Clinical Trial", help="Trial title")
+    parser.add_argument("--responses-json", help="JSON object or path containing checklist responses")
+    parser.add_argument("--full-compliance", action="store_true", help="Fill every item as FULL (benchmark only)")
 
     args = parser.parse_args()
-
-    # Handle batch subcommand
-    if args.subcommand == "batch":
-        run_batch_evaluation(input_path=args.input, output_path=args.output, json_format=args.json)
-        return
-
-    # Handle --csv flag on top-level
-    if args.csv:
-        run_batch_evaluation(input_path=args.csv, output_path=None, json_format=args.json)
-        return
-
-    if args.interactive:
-        report = run_interactive_mode()
-    else:
-        responses = {}
-        if args.full_compliance:
-            for k in CONSORT_TAXONOMY.keys():
-                responses[k] = "FULL"
-        elif args.responses_json:
-            if os.path.exists(args.responses_json):
-                with open(args.responses_json, "r", encoding="utf-8") as f:
-                    responses = json.load(f)
-            else:
-                try:
-                    responses = json.loads(args.responses_json)
-                except Exception:
-                    responses = {}
+    try:
+        if args.subcommand == "batch":
+            run_batch_evaluation(args.input, args.output, args.json)
+            return
+        if args.csv:
+            run_batch_evaluation(args.csv, None, args.json)
+            return
+        if args.interactive:
+            report = run_interactive_mode()
         else:
-            # Default moderate trial responses
-            for k in ["1a", "1b", "2a", "2b", "3a", "4a", "5", "6a", "7a", "8a", "9", "11a", "12a", "13a", "15", "16", "17a", "19", "20", "22", "23", "25"]:
-                responses[k] = "FULL"
-            for k in ["3b", "6b", "8b", "10", "11b", "12b", "13b", "14a", "17b", "18", "21", "24"]:
-                responses[k] = "PARTIAL"
+            if args.full_compliance:
+                responses = {key: "FULL" for key in CONSORT_TAXONOMY}
+            elif args.responses_json:
+                responses = _load_responses(args.responses_json)
+            else:
+                responses = {}
+            report = ConsortEvaluatorEngine.evaluate_checklist_responses(
+                responses=responses,
+                trial_id=args.trial_id,
+                trial_title=args.title,
+            )
+    except (FileNotFoundError, ValueError) as exc:
+        parser.error(str(exc))
 
-        report = ConsortEvaluatorEngine.evaluate_checklist_responses(
-            responses=responses,
-            trial_id=args.trial_id,
-            trial_title=args.title
-        )
-
-    if args.json:
-        print(report.to_json())
-    else:
-        print(format_report_text(report))
+    print(report.to_json() if args.json else format_report_text(report))
 
 
 if __name__ == "__main__":
     main()
-

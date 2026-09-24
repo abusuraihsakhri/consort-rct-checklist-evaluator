@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Evaluate randomized-trial reports against CONSORT 2025 reporting items in the browser.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="color-scheme" content="light dark">
+  <title>CONSORT 2025 Checklist Evaluator</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-group">
+      <div class="brand-mark" aria-hidden="true">C25</div>
+      <div>
+        <h1>CONSORT Checklist Evaluator</h1>
+        <p>Structured reporting review for randomized trials</p>
+      </div>
+    </div>
+    <button class="icon-button" id="themeToggle" type="button" aria-label="Switch to dark theme" title="Toggle theme">
+      <span class="theme-icon" aria-hidden="true">☾</span>
+    </button>
+  </header>
+
+  <main class="app-shell">
+    <section class="workspace-card" aria-labelledby="checklistHeading">
+      <div class="workspace-head">
+        <div>
+          <div class="eyebrow">CONSORT 2025</div>
+          <h2 id="checklistHeading">Reporting checklist</h2>
+          <p>42 scored entries representing the 30 numbered checklist items.</p>
+        </div>
+        <div class="meta-chips" aria-label="Application characteristics">
+          <span>Local processing</span>
+          <span>No uploads</span>
+          <span>30 items</span>
+        </div>
+      </div>
+
+      <div class="study-fields">
+        <label>
+          <span>Trial ID</span>
+          <input id="trialId" type="text" maxlength="80" value="TRIAL-001" autocomplete="off">
+        </label>
+        <label>
+          <span>Trial title</span>
+          <input id="trialTitle" type="text" maxlength="180" placeholder="Optional title" autocomplete="off">
+        </label>
+      </div>
+
+      <nav class="section-tabs" id="sectionTabs" aria-label="CONSORT checklist sections"></nav>
+      <div class="checklist-pane" id="checklistPane" aria-live="polite"></div>
+
+      <details class="flow-card" id="flowDetails">
+        <summary>
+          <span>
+            <strong>Participant-flow arithmetic</strong>
+            <small>Optional consistency checks; no risk-of-bias inference</small>
+          </span>
+          <span class="summary-chevron" aria-hidden="true">⌄</span>
+        </summary>
+        <div class="flow-content">
+          <label class="flow-enable">
+            <input type="checkbox" id="includeFlow">
+            Include participant-flow validation in this analysis
+          </label>
+          <div class="flow-grid">
+            <fieldset>
+              <legend>Enrollment</legend>
+              <label>Assessed <input id="assessed" type="number" min="0" step="1" value="250"></label>
+              <label>Excluded total <input id="excludedTotal" type="number" min="0" step="1" value="50"></label>
+              <label>Not eligible <input id="excludedCriteria" type="number" min="0" step="1" value="35"></label>
+              <label>Declined consent <input id="excludedDeclined" type="number" min="0" step="1" value="10"></label>
+              <label>Other exclusions <input id="excludedOther" type="number" min="0" step="1" value="5"></label>
+              <label>Randomized <input id="randomised" type="number" min="0" step="1" value="200"></label>
+            </fieldset>
+            <fieldset>
+              <legend>Intervention arm</legend>
+              <label>Allocated <input id="aAllocated" type="number" min="0" step="1" value="100"></label>
+              <label>Received <input id="aReceived" type="number" min="0" step="1" value="98"></label>
+              <label>Did not receive <input id="aNotReceived" type="number" min="0" step="1" value="2"></label>
+              <label>Analysed <input id="aAnalysed" type="number" min="0" step="1" value="95"></label>
+              <label>Excluded from analysis <input id="aExcludedAnalysis" type="number" min="0" step="1" value="5"></label>
+            </fieldset>
+            <fieldset>
+              <legend>Comparator arm</legend>
+              <label>Allocated <input id="bAllocated" type="number" min="0" step="1" value="100"></label>
+              <label>Received <input id="bReceived" type="number" min="0" step="1" value="100"></label>
+              <label>Did not receive <input id="bNotReceived" type="number" min="0" step="1" value="0"></label>
+              <label>Analysed <input id="bAnalysed" type="number" min="0" step="1" value="95"></label>
+              <label>Excluded from analysis <input id="bExcludedAnalysis" type="number" min="0" step="1" value="5"></label>
+            </fieldset>
+          </div>
+        </div>
+      </details>
+
+      <div class="action-row">
+        <div class="secondary-actions">
+          <button class="button ghost" id="resetButton" type="button">Reset</button>
+          <button class="button ghost" id="exampleButton" type="button">Load example</button>
+        </div>
+        <button class="button primary" id="analyseButton" type="button">Analyse reporting</button>
+      </div>
+    </section>
+
+    <aside class="results-card" aria-labelledby="resultsHeading">
+      <div class="results-head">
+        <div>
+          <div class="eyebrow">Evaluation</div>
+          <h2 id="resultsHeading">Results</h2>
+        </div>
+        <span class="status-pill" id="resultStatus">Not analysed</span>
+      </div>
+
+      <div class="score-block">
+        <div class="score-ring" id="scoreRing" aria-label="Completion score">
+          <span id="scoreValue">—</span>
+          <small>completion</small>
+        </div>
+        <div class="score-copy">
+          <strong id="bandValue">Ready for review</strong>
+          <span id="pointsValue">Set each checklist item, then analyse.</span>
+        </div>
+      </div>
+
+      <div class="count-grid" aria-label="Checklist response counts">
+        <div><span id="fullCount">0</span><small>Full</small></div>
+        <div><span id="partialCount">0</span><small>Partial</small></div>
+        <div><span id="noCount">42</span><small>No</small></div>
+        <div><span id="naCount">0</span><small>N/A</small></div>
+      </div>
+
+      <section class="result-section" aria-labelledby="sectionBreakdownHeading">
+        <div class="result-section-head">
+          <h3 id="sectionBreakdownHeading">Section completion</h3>
+        </div>
+        <div id="sectionResults" class="section-results"></div>
+      </section>
+
+      <section class="result-section" aria-labelledby="gapsHeading">
+        <div class="result-section-head">
+          <h3 id="gapsHeading">Priority reporting gaps</h3>
+          <span id="gapCount">0</span>
+        </div>
+        <div id="gapList" class="gap-list muted-message">Run an analysis to list incomplete items.</div>
+      </section>
+
+      <section class="result-section" id="flowResultSection" aria-labelledby="flowResultHeading" hidden>
+        <div class="result-section-head">
+          <h3 id="flowResultHeading">Flow checks</h3>
+        </div>
+        <div id="flowResults" class="flow-results"></div>
+      </section>
+
+      <div class="export-row">
+        <button class="button ghost compact" id="exportJson" type="button" disabled>Export JSON</button>
+        <button class="button ghost compact" id="exportCsv" type="button" disabled>Export CSV</button>
+      </div>
+
+      <p class="method-note">
+        The percentage and completeness bands are repository-defined reporting aids. They are not official CONSORT scores, trial-quality ratings, or Cochrane RoB 2 judgements.
+      </p>
+    </aside>
+  </main>
+
+  <footer>
+    <span>Data remain in this browser session; checklist responses are not transmitted.</span>
+    <span class="footer-links">
+      <a href="https://www.consort-spirit.org/" target="_blank" rel="noopener noreferrer">CONSORT–SPIRIT</a>
+      <a href="https://www.bmj.com/content/389/bmj-2024-081123" target="_blank" rel="noopener noreferrer">CONSORT 2025 statement</a>
+    </span>
+  </footer>
+</body>
+</html>
